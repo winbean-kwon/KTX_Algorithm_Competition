@@ -63,7 +63,7 @@ def calculate_rsi(prices, period):
 dates, codes, names, volumes, closes = parse_dataset()
 
 rsi_dict = {}
-period = 6
+period = 25
 
 for code in set(codes):
     index_list = [i for i, x in enumerate(codes) if x == code]

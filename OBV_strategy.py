@@ -1,5 +1,5 @@
 import csv
-
+import numpy as np
 
 problem = []
 
@@ -51,29 +51,29 @@ def calculate_obv(volumes, closes):
 
 dates, codes, names, volumes, closes = parse_dataset()
 
-obv_dict = {}  # 종목별 OBV 값을 저장할 딕셔너리
+# 새로운 특징 생성
+new_features = generate_feature(closes)
 
-for code in set(codes):  # 종목 코드를 기준으로 반복
-    index_list = [i for i, x in enumerate(codes) if x == code]  # 종목 코드에 해당하는 인덱스 리스트 추출
-    code_volumes = [volumes[i] for i in index_list]  # 종목 코드에 해당하는 거래량 리스트 추출
-    code_closes = [closes[i] for i in index_list]  # 종목 코드에 해당하는 종가 리스트 추출
-    obv = calculate_obv(code_volumes, code_closes)
-    obv_dict[code] = obv[-1]  # 최신 OBV 값을 딕셔너리에 저장
-    
+# RSI와 20일 이동평균의 상관관계 계산
+rsi_values = np.array(new_features)[:, 0]
+volume_values = np.array(new_features)[:, 1]
+correlation = np.corrcoef(rsi_values, volume_values)[0, 1]
 
-# OBV 값을 기준으로 종목을 상승 가능성이 높은 순서로 정렬
-sorted_obv = sorted(obv_dict.items(), key=lambda x: x[1], reverse=True)
+print("RSI와 거래량의 상관관계:", correlation)
 
-for rank, item in enumerate(sorted_obv, start=1):
-    code = item[0]
-    
+# 새로운 특징을 기준으로 종목들을 순위별로 정렬
+combined_dict = {}
+for code, feature in zip(set(codes), new_features):
+    combined_dict[code] = feature
+
+sorted_combined = sorted(combined_dict.items(), key=lambda x: x[1], reverse=True)
 
 # 결과를 baseline_submission.csv 파일에 작성
 with open('baseline_submission.csv', 'w', newline='') as file:
     writer = csv.writer(file)
     writer.writerow(['종목코드', '순위'])
 
-    for rank, item in enumerate(sorted_obv, start=1):
+    for rank, item in enumerate(sorted_combined, start=1):
         code = item[0]
         writer.writerow([code, rank])
     

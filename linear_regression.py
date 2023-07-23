@@ -1,6 +1,10 @@
 import csv
 import numpy as np
 import pandas as pd
+from sklearn.linear_model import LinearRegression
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+import matplotlib.pyplot as plt
 
 problem = []
 
@@ -9,6 +13,9 @@ def parse_dataset():
     codes = []
     names = []
     volumes = []
+    starts = []
+    high_price = []
+    low_price = []
     closes = []
 
     with open('train.csv', 'r') as file:
@@ -20,6 +27,9 @@ def parse_dataset():
             code = row[1]
             name = row[2]
             volume = int(row[3])
+            start = int(row[4])
+            high = int(row[5])
+            low = int(row[6])
             close = int(row[7])
 
             if volume == 0:
@@ -28,54 +38,42 @@ def parse_dataset():
             codes.append(code)
             names.append(name)
             volumes.append(volume)
+            starts.append(start)
+            high_price.append(high)
+            low_price.append(low)
             closes.append(close)
 
-    return dates, codes, names, volumes, closes
+    return dates, codes, names, volumes, starts, high_price, low_price, closes
 
-def calculate_rsi(prices, period):
-    # 가격 데이터를 기반으로 RSI 계산
-    changes = []
-    for i in range(1, len(prices)):
-        change = prices[i] - prices[i-1]
-        changes.append(change)
-    
-    gains = [change for change in changes if change >= 0]
-    losses = [-change for change in changes if change < 0]
-    
-    avg_gain = sum(gains) / period
-    avg_loss = sum(losses) / period
-    
-    for i in range(period, len(prices)):
-        change = changes[i-1]
-        if change >= 0:
-            avg_gain = (avg_gain * (period - 1) + change) / period
-            avg_loss = (avg_loss * (period - 1)) / period
-        else:
-            avg_gain = (avg_gain * (period - 1)) / period
-            avg_loss = (avg_loss * (period - 1) - change) / period
-    
-    if avg_loss != 0:
-        rsi = 100 - (100 / (1 + (avg_gain / avg_loss)))
-    else:
-        rsi = 100
-    
-    return rsi
+# Feature Engineering: Add additional features if needed
+def add_additional_features(df):
+    # Example: Calculate moving averages
+    df['5-day MA'] = df['closes'].rolling(window=5).mean()
+    df['10-day MA'] = df['closes'].rolling(window=10).mean()
 
+    return df
+
+# Calculate daily returns
+def calculate_returns(prices):
+    return prices.pct_change().dropna()
+
+# Calculate Sharpe ratio
 def calculate_sharpe_ratio(returns, risk_free_rate=0.035):
-    # 샤프 지수를 계산합니다.
-    excess_returns = returns - risk_free_rate
+    daily_risk_free_rate = (1 + risk_free_rate) ** (1 / 250) - 1
+    excess_returns = returns - daily_risk_free_rate
     mean_excess_return = np.mean(excess_returns)
     std_excess_return = np.std(excess_returns)
-    sharpe_ratio = mean_excess_return / std_excess_return
+    
+    if std_excess_return == 0:
+        sharpe_ratio = 0  # 0으로 나누기 오류를 방지하기 위해 예외 처리
+    else:
+        sharpe_ratio = mean_excess_return / std_excess_return
     
     return sharpe_ratio
 
-dates, codes, names, volumes, closes = parse_dataset()
+dates, codes, names, volumes, starts, high_price, low_price, closes = parse_dataset()
 
 sharpe_dict = {}
-rsi_dict = {}
-period=10
-
 for code in set(codes):
     index_list = [i for i, x in enumerate(codes) if x == code]
     code_closes = [closes[i] for i in index_list]
@@ -85,44 +83,22 @@ for code in set(codes):
     sharpe = calculate_sharpe_ratio(returns, risk_free_rate=0.035)
     sharpe_dict[code] = sharpe
 
-    index_list = [i for i, x in enumerate(codes) if x == code]
-    code_closes = [closes[i] for i in index_list]
-    rsi = calculate_rsi(code_closes, period)
-    rsi_dict[code] = rsi
-
-sorted_rsi = sorted(rsi_dict.items(), key=lambda x: x[1], reverse=True)
 sorted_sharpe = sorted(sharpe_dict.items(), key=lambda x: x[1], reverse=True)
 
-# sorted_sharpe와 sorted_rsi를 활용하여 데이터프레임 생성
-df_sharpe = pd.DataFrame(sorted_sharpe, columns=['종목코드', '순위_sharpe'])
-df_rsi = pd.DataFrame(sorted_rsi, columns=['종목코드', '순위_rsi'])
-
-# 두 데이터프레임을 '종목코드'를 기준으로 합치기
-merged_data = pd.merge(df_sharpe, df_rsi, on='종목코드')
-
-# 상관관계 계산하기
-correlation = merged_data['순위_sharpe'].corr(merged_data['순위_rsi'])
-
-print("RSI와 샤프지수 전략의 상관관계:", correlation)
-
-#Combine the rankings
-combined_ranking = {}
-for rank, (code, _) in enumerate(sorted_rsi):
-    combined_ranking[code] = rank
-
-for rank, (code, _) in enumerate(sorted_sharpe):
-    combined_ranking[code] += rank
-
-# Sort the stocks based on the combined ranking
-sorted_combined = sorted(combined_ranking.items(), key=lambda x: x[1])
+for rank, item in enumerate(sorted_sharpe, start=1):
+    code = item[0]
 
 with open('baseline_submission.csv', 'w', newline='') as file:
     writer = csv.writer(file)
     writer.writerow(['종목코드', '순위'])
 
-    for rank, (code, _) in enumerate(sorted_combined, start=1):
+    for rank, item in enumerate(sorted_sharpe, start=1):
+        code = item[0]
         writer.writerow([code, rank])
 
+#이상한 종목들 중 상위200 하위 200에 들어가는 종목들 분류
+
+# ... (이전 코드와 sorted_sharpe, adjusted_submission.csv 등은 그대로 사용)
 #이상한 종목들 중 상위200 하위 200에 들어가는 종목들 분류
 
 data = {}
@@ -165,4 +141,35 @@ with open("adjusted_submission.csv", 'w', newline='') as file:
 
     for code, rank in sorted_data.items():
         writer.writerow([code, rank])
-        
+
+# 선형 회귀 모델 구현
+X = np.array(list(sorted_data.values())).reshape(-1, 1)  # 랭크 값을 피처로 사용
+y = np.array(list(sharpe_dict.values()))  # 샤프 지수를 타겟 변수로 사용
+model = LinearRegression()
+model.fit(X, y)
+print(model.fit(X,y))
+
+
+# 예측 결과를 저장할 딕셔너리
+prediction_dict = {}
+for code in set(codes):
+    rank = sorted_data[code]
+    prediction = model.predict([[rank]])[0]  # 선형 회귀 모델로 샤프 지수를 예측
+    prediction_dict[code] = prediction
+
+# 예측 결과를 정렬하여 최종 결과 생성
+sorted_prediction = sorted(prediction_dict.items(), key=lambda x: x[1], reverse=True)
+
+with open("final_submission.csv", 'w', newline='') as file:
+    writer = csv.writer(file)
+    writer.writerow(['종목코드', '순위'])
+
+    for i, (code, _) in enumerate(sorted_prediction, start=1):
+        writer.writerow([code, i])
+
+
+
+
+
+
+

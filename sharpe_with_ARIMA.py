@@ -1,6 +1,7 @@
 import csv
 import numpy as np
 import pandas as pd
+from statsmodels.tsa.arima.model import ARIMA
 
 problem = []
 
@@ -9,6 +10,9 @@ def parse_dataset():
     codes = []
     names = []
     volumes = []
+    starts = []
+    high_price = []
+    low_price = []
     closes = []
 
     with open('train.csv', 'r') as file:
@@ -20,6 +24,9 @@ def parse_dataset():
             code = row[1]
             name = row[2]
             volume = int(row[3])
+            start = int(row[4])
+            high = int(row[5])
+            low = int(row[6])
             close = int(row[7])
 
             if volume == 0:
@@ -28,10 +35,31 @@ def parse_dataset():
             codes.append(code)
             names.append(name)
             volumes.append(volume)
+            starts.append(start)
+            high_price.append(high)
+            low_price.append(low)
             closes.append(close)
 
-    return dates, codes, names, volumes, closes
+    return dates, codes, names, volumes, starts, high_price, low_price, closes
 
+
+#기간 동안의 투자 수익률 계산
+def calculate_returns(closes):
+    returns = np.diff(closes) / closes[:-1]
+    returns = np.concatenate([[0], returns])
+    return returns
+
+# ARIMA 모델을 사용하여 미래 수익 예측
+def predict_returns(closes, forecast_steps=15):
+    model = ARIMA(closes, order=(1,0,0))  # ARIMA(1,0,0) 모델로 가정
+    model_fit = model.fit()
+    forecast = model_fit.forecast(steps=forecast_steps)  # forecast_steps만큼 미래로 예측
+    return forecast[-1]  # 가장 마지막 날의 예측 수익을 반환
+
+
+period = 6
+
+#기술적 지표 계산
 def calculate_rsi(prices, period):
     # 가격 데이터를 기반으로 RSI 계산
     changes = []
@@ -61,67 +89,61 @@ def calculate_rsi(prices, period):
     
     return rsi
 
+# 샤프 지수 계산
 def calculate_sharpe_ratio(returns, risk_free_rate=0.035):
-    # 샤프 지수를 계산합니다.
     excess_returns = returns - risk_free_rate
     mean_excess_return = np.mean(excess_returns)
     std_excess_return = np.std(excess_returns)
     sharpe_ratio = mean_excess_return / std_excess_return
-    
     return sharpe_ratio
 
-dates, codes, names, volumes, closes = parse_dataset()
+# ARIMA 모델로 미래 수익 예측
+def predict_returns(closes, forecast_steps=15):
+    model = ARIMA(closes, order=(1,0,0))  # ARIMA(1,0,0) 모델로 가정
+    model_fit = model.fit()
+    forecast = model_fit.forecast(steps=forecast_steps)  # forecast_steps만큼 미래로 예측
+    return forecast
+
+dates, codes, names, volumes, opens, highs, lows, closes = parse_dataset()
 
 sharpe_dict = {}
-rsi_dict = {}
-period=10
 
+count=1
 for code in set(codes):
     index_list = [i for i, x in enumerate(codes) if x == code]
     code_closes = [closes[i] for i in index_list]
-    # 종가를 기반으로 수익률 계산
-    returns = np.diff(code_closes) / code_closes[:-1]
-    returns = np.concatenate([[0], returns])  # returns 배열의 길이를 원래 데이터와 동일하게 만듭니다.
-    sharpe = calculate_sharpe_ratio(returns, risk_free_rate=0.035)
-    sharpe_dict[code] = sharpe
 
-    index_list = [i for i, x in enumerate(codes) if x == code]
-    code_closes = [closes[i] for i in index_list]
-    rsi = calculate_rsi(code_closes, period)
-    rsi_dict[code] = rsi
+    # RSI 계산
+    rsi = calculate_rsi(code_closes,period)
 
-sorted_rsi = sorted(rsi_dict.items(), key=lambda x: x[1], reverse=True)
+    # 기간 동안의 투자 수익률 계산
+    returns = calculate_returns(code_closes)
+
+    # 샤프 지수 계산
+    sharpe_ratio = calculate_sharpe_ratio(returns)
+
+    # ARIMA 모델을 사용하여 15일 동안의 미래 수익 예측
+    forecast_returns = predict_returns(code_closes, forecast_steps=15)
+
+    # 15일 동안의 미래 예측 수익을 기반으로 종목의 스코어 계산
+    forecast_mean = np.mean(forecast_returns)
+    score = rsi + sharpe_ratio + forecast_mean
+    print(score)
+    print(code)
+    print(count)
+    count+=1
+    sharpe_dict[code] = score
+
 sorted_sharpe = sorted(sharpe_dict.items(), key=lambda x: x[1], reverse=True)
 
-# sorted_sharpe와 sorted_rsi를 활용하여 데이터프레임 생성
-df_sharpe = pd.DataFrame(sorted_sharpe, columns=['종목코드', '순위_sharpe'])
-df_rsi = pd.DataFrame(sorted_rsi, columns=['종목코드', '순위_rsi'])
-
-# 두 데이터프레임을 '종목코드'를 기준으로 합치기
-merged_data = pd.merge(df_sharpe, df_rsi, on='종목코드')
-
-# 상관관계 계산하기
-correlation = merged_data['순위_sharpe'].corr(merged_data['순위_rsi'])
-
-print("RSI와 샤프지수 전략의 상관관계:", correlation)
-
-#Combine the rankings
-combined_ranking = {}
-for rank, (code, _) in enumerate(sorted_rsi):
-    combined_ranking[code] = rank
-
-for rank, (code, _) in enumerate(sorted_sharpe):
-    combined_ranking[code] += rank
-
-# Sort the stocks based on the combined ranking
-sorted_combined = sorted(combined_ranking.items(), key=lambda x: x[1])
-
-with open('baseline_submission.csv', 'w', newline='') as file:
+# 정렬된 샤프지수를 기준으로 종목 랭킹 작성
+with open('sharpe_ratio_ranking.csv', 'w', newline='') as file:
     writer = csv.writer(file)
     writer.writerow(['종목코드', '순위'])
 
-    for rank, (code, _) in enumerate(sorted_combined, start=1):
+    for rank, (code, _) in enumerate(sorted_sharpe, start=1):
         writer.writerow([code, rank])
+
 
 #이상한 종목들 중 상위200 하위 200에 들어가는 종목들 분류
 
@@ -165,4 +187,5 @@ with open("adjusted_submission.csv", 'w', newline='') as file:
 
     for code, rank in sorted_data.items():
         writer.writerow([code, rank])
-        
+
+#변동성 큰 종목들도 분류해야하는데...
