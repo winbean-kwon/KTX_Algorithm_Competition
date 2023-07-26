@@ -133,19 +133,20 @@ with open("adjusted_submission.csv", 'w', newline='') as file:
 returns = {}
 for code in set(codes):
     rank = sorted_data.get(code)
-    if rank <= 200 or rank >= 1800:
+    if rank >= 1800 or rank <= 200:
         # 마지막 15일 동안의 주식 가격 데이터 가져오기
-        index_list = [i for i, x in enumerate(codes) if x == code][-15:]
+        index_list = [i for i, x in enumerate(codes) if x == code][-16:]
         code_closes = [closes[i] for i in index_list]
 
         # 마지막 15일 동안의 일간 수익률 계산
         daily_returns = [(code_closes[i]-code_closes[i-1]) / code_closes[i-1] for i in range(1, len(code_closes))]
-        if rank >= 1800:
-            daily_returns = daily_returns * -1
-        returns[code] = daily_returns
 
+        returns[code] = daily_returns
+        
         # 기간 동안의 평균 일간 수익률 계산
         avg_daily_return = np.mean(daily_returns)*250
+        if rank >= 1800:
+            avg_daily_return = avg_daily_return * -1
 
         # n=2에서 n=15까지의 연율화된 n 번째 매매일의 일간 수익률의 평균을 구하고, 이들의 차이를 제곱하여 합산
         n_values = range(2, 16)  # n=2부터 n=15까지
@@ -157,10 +158,9 @@ for code in set(codes):
             sum_diff_squared += diff_squared
 
         # 변동성 계산
-        n = len(daily_returns)
-        volatility = np.sqrt(sum_diff_squared / (n - 2))
+        volatility = np.sqrt(sum_diff_squared / 13)
     
-
+print(returns)
 # 마지막 15일 동안의 누적 수익률 계산
 cumulative_returns = {code: np.prod(np.array(daily_returns) + 1) - 1 for code, daily_returns in returns.items()}
 
