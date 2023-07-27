@@ -86,10 +86,10 @@ macd = calculate_macd(pd.Series(closes))
 
 # RSI와 MACD의 상관관계 계산
 rsi_dict = {}
-period = 14
+period = 15
 
 for code in set(codes):
-    index_list = [i for i, x in enumerate(codes) if x == code]
+    index_list = [i for i, x in enumerate(codes) if x == code][:-15]
     code_closes = [closes[i] for i in index_list]
     rsi = calculate_rsi(code_closes, period)
     rsi_dict[code] = rsi
@@ -158,3 +158,52 @@ with open("adjusted_submission.csv", 'w', newline='') as file:
 
     for code, rank in sorted_data.items():
         writer.writerow([code, rank])
+
+
+# 분류된 주식에 따라 마지막 15일 데이터로 샤프지수 계산
+returns = {}
+for code in set(codes):
+    rank = sorted_data.get(code)
+    
+    if rank >= 1800 or rank <= 200:
+        # 마지막 15일 동안의 주식 가격 데이터 가져오기
+        index_list = [i for i, x in enumerate(codes) if x == code][-15:]
+        code_closes = [closes[i] for i in index_list]
+
+        # 마지막 15일 동안의 일간 수익률 계산
+        daily_returns = [(code_closes[i]-code_closes[i-1]) / code_closes[i-1] for i in range(1, len(code_closes))]
+
+        returns[code] = daily_returns
+        
+        # 기간 동안의 평균 일간 수익률 계산
+        avg_daily_return = np.mean(daily_returns)*250
+        if rank >= 1800:
+            avg_daily_return = avg_daily_return * -1
+
+        # n=2에서 n=15까지의 연율화된 n 번째 매매일의 일간 수익률의 평균을 구하고, 이들의 차이를 제곱하여 합산
+        n_values = range(2, 16)  # n=2부터 n=15까지
+        sum_diff_squared = 0
+        
+        for n in n_values:
+            avg_n_day_return = np.mean(daily_returns[:n])*250
+            diff_squared = (avg_n_day_return - avg_daily_return) ** 2
+            sum_diff_squared += diff_squared
+
+        # 변동성 계산
+        volatility = np.sqrt(sum_diff_squared / 13)
+    
+# 마지막 15일 동안의 누적 수익률 계산
+cumulative_returns = {code: np.prod(np.array(daily_returns) + 1) - 1 for code, daily_returns in returns.items()}
+
+# 마지막 15일 동안의 평균 Long 및 Short 수익률 계산
+long_returns_sum = sum(cumulative_returns[code] for code, rank in sorted_data.items() if rank <= 200)
+short_returns_sum = sum(cumulative_returns[code] for code, rank in sorted_data.items() if rank >= 1800) * -1
+
+# 마지막 15일 동안의 연율화된 총 수익률 계산
+avg_total_returns = ((long_returns_sum + short_returns_sum) / 400) * 250 / 15
+
+# 샤프지수 계산
+risk_free_rate = 0.035  # 연율화된 무위험 수익률 (3.5%)
+sharpe_ratio = (avg_total_returns - risk_free_rate) / volatility
+
+print("마지막 15일 동안의 샤프지수:", sharpe_ratio)
