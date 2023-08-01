@@ -1,11 +1,8 @@
 import csv
 import numpy as np
 import pandas as pd
+from statsmodels.tsa.arima.model import ARIMA
 
-
-# 모든 행과 열을 표시하도록 출력 옵션 설정
-pd.set_option('display.max_rows', None)
-pd.set_option('display.max_columns', None)
 problem = []
 
 def parse_dataset():
@@ -13,6 +10,9 @@ def parse_dataset():
     codes = []
     names = []
     volumes = []
+    starts = []
+    high_price = []
+    low_price = []
     closes = []
 
     with open('train.csv', 'r') as file:
@@ -24,6 +24,9 @@ def parse_dataset():
             code = row[1]
             name = row[2]
             volume = int(row[3])
+            start = int(row[4])
+            high = int(row[5])
+            low = int(row[6])
             close = int(row[7])
 
             if volume == 0:
@@ -32,25 +35,44 @@ def parse_dataset():
             codes.append(code)
             names.append(name)
             volumes.append(volume)
+            starts.append(start)
+            high_price.append(high)
+            low_price.append(low)
             closes.append(close)
 
-    return dates, codes, names, volumes, closes
+    return dates, codes, names, volumes, starts, high_price, low_price, closes
 
+
+#기간 동안의 투자 수익률 계산
+def calculate_returns(closes):
+    returns = np.diff(closes) / closes[:-1]
+    returns = np.concatenate([[0], returns])
+    return returns
+
+period = 15
+
+#기술적 지표 계산
 def calculate_rsi(prices, period):
     # 가격 데이터를 기반으로 RSI 계산
+    alpha = 0.2
     changes = []
-    for i in range(1, 16):
+    for i in range(1, len(prices)):
         change = prices[i] - prices[i-1]
         changes.append(change)
+    data = np.array(changes)
+    weighted_average = np.zeros_like(data)
+    weighted_average[0] = data[0]
+    for t in range(1, len(data)):
+        weighted_average[t] = (1 - alpha) * data[t] + alpha * weighted_average[t - 1]
     
-    gains = [change for change in changes if change >= 0]
-    losses = [-change for change in changes if change < 0]
+    gains = [change for change in weighted_average if change >= 0]
+    losses = [-change for change in weighted_average if change < 0]
     
     avg_gain = sum(gains) / period
     avg_loss = sum(losses) / period
     
-    for i in range(period, 16):
-        change = changes[i-1]
+    for i in range(period, len(prices)):
+        change = weighted_average[i-1]
         if change >= 0:
             avg_gain = (avg_gain * (period - 1) + change) / period
             avg_loss = (avg_loss * (period - 1)) / period
@@ -63,8 +85,14 @@ def calculate_rsi(prices, period):
     else:
         rsi = 100
     
-    return rsi
+    # RSI 값을 -1과 1 사이로 변환
+    min_value = 0
+    max_value = 100
+    transformed_rsi = (rsi - min_value) / (max_value - min_value) * 2 - 1
+    
+    return transformed_rsi
 
+# 샤프 지수 계산
 def calculate_sharpe_ratio(returns, risk_free_rate=0.035):
     alpha = 0.2
     # 샤프 지수를 계산합니다.
@@ -77,68 +105,69 @@ def calculate_sharpe_ratio(returns, risk_free_rate=0.035):
     mean_excess_return = np.mean(weighted_average)
     std_excess_return = np.std(weighted_average)
     sharpe_ratio = mean_excess_return / std_excess_return
-    
-    return sharpe_ratio
 
-dates, codes, names, volumes, closes = parse_dataset()
+    # 샤프 지수 값을 -1과 1 사이로 변환
+    min_value = -1
+    max_value = 1
+    transformed_sharpe_ratio = (sharpe_ratio - min_value) / (max_value - min_value) * 2 - 1
+
+    return transformed_sharpe_ratio
+
+# ARIMA 모델로 미래 수익 예측
+def predict_returns(closes, forecast_steps=15):
+    model = ARIMA(closes, order=(0,1,1))  # ARIMA(1,0,0) 모델로 가정
+    model_fit = model.fit()
+    forecast = model_fit.forecast(steps=forecast_steps)  # forecast_steps만큼 미래로 예측
+    # 예측된 수익을 -1과 1 사이의 값으로 변환
+    min_value = min(forecast)
+    max_value = max(forecast)
+    new_min = -1
+    new_max = 1
+    transformed_forecast = [(value - min_value) / (max_value - min_value) * (new_max - new_min) + new_min for value in forecast]
+
+    return transformed_forecast
+
+dates, codes, names, volumes, opens, highs, lows, closes = parse_dataset()
 
 sharpe_dict = {}
-rsi_dict = {}
-period = 15
 sorted_codes = []
 [sorted_codes.append(code) for code in codes if code not in sorted_codes]
 
+count=1
 for code in sorted_codes:
-    
     index_list = [i for i, x in enumerate(codes) if x == code][:-15]
     code_closes = [closes[i] for i in index_list]
-    # 종가를 기반으로 수익률 계산
-    returns = np.diff(code_closes) / code_closes[:-1]
-    returns = np.concatenate([[0], returns])  # returns 배열의 길이를 원래 데이터와 동일하게 만듭니다.
-    
-    sharpe = calculate_sharpe_ratio(returns, risk_free_rate=0.035)
-    sharpe_dict[code] = sharpe
 
-    rsi = calculate_rsi(code_closes, period)
-    rsi_dict[code] = rsi
+    # RSI 계산
+    rsi = calculate_rsi(code_closes,period)
 
-sorted_rsi = sorted(rsi_dict.items(), key=lambda x: x[1], reverse=True)
-sorted_sharpe = sorted(sharpe_dict.items(), key=lambda x: x[1], reverse=True)
+    # 기간 동안의 투자 수익률 계산
+    returns = calculate_returns(code_closes)
 
-# sorted_sharpe와 sorted_rsi를 활용하여 데이터프레임 생성
-df_sharpe = pd.DataFrame(sorted_sharpe, columns=['종목코드', '순위_sharpe'])
-df_rsi = pd.DataFrame(sorted_rsi, columns=['종목코드', '순위_rsi'])
+    # 샤프 지수 계산
+    sharpe_ratio = calculate_sharpe_ratio(returns)
 
-# 두 데이터프레임을 '종목코드'를 기준으로 합치기
-merged_data = pd.merge(df_sharpe, df_rsi, on='종목코드')
+    # ARIMA 모델을 사용하여 15일 동안의 미래 수익 예측
+    forecast_returns = predict_returns(code_closes, forecast_steps=15)
 
-# print(merged_data.head(200))
-# print(merged_data.tail(200))
+    # 15일 동안의 미래 예측 수익을 기반으로 종목의 스코어 계산
+    forecast_mean = np.mean(forecast_returns)
+    score = -rsi + sharpe_ratio + forecast_mean
+    count+=1
+    sharpe_dict[code] = score
 
+sorted_sharpe = sorted(sharpe_dict.items(), key=lambda x: x[1])
 
-# 상관관계 계산하기
-correlation = merged_data['순위_sharpe'].corr(merged_data['순위_rsi'])
-
-# 랭킹 합치기
-combined_ranking = {}
-for rank, (code, _) in enumerate(sorted_rsi):
-    combined_ranking[code] = rank + combined_ranking.get(code, 0)
-
-for rank, (code, _) in enumerate(sorted_sharpe):
-    combined_ranking[code] = rank + combined_ranking.get(code, 0)
-
-# 합친 랭킹 분류
-sorted_combined = sorted(combined_ranking.items(), key=lambda x: x[1])
-
+# 정렬된 샤프지수를 기준으로 종목 랭킹 작성
 with open('baseline_submission.csv', 'w', newline='') as file:
     writer = csv.writer(file)
     writer.writerow(['종목코드', '순위'])
 
-    for rank, (code, _) in enumerate(sorted_combined, start=1):
+    for rank, (code, _) in enumerate(sorted_sharpe, start=1):
         writer.writerow([code, rank])
 
-#이상한 종목들 중 상위200 하위 200에 들어가는 종목들 분류
 
+#이상한 종목들 중 상위200 하위 200에 들어가는 종목들 분류
 data = {}
 with open('baseline_submission.csv', newline='') as file:
     reader = csv.reader(file)
@@ -148,25 +177,26 @@ with open('baseline_submission.csv', newline='') as file:
         rank = int(row[1])
         data[code] = rank
     
-i = 1
-s = 1
+i=1
+s=1
+sorted_problem = []
+[sorted_problem.append(code) for code in problem if code not in sorted_problem]
 
-for code in sorted(problem):
+for code in sorted_problem:
     if code in data:
         rank = data[code]
-        test1 = 200 + i
-        test2 = 1801 - s
+        test1 = 200+i
+        test2 = 1800-s
         before = next(key for key, value in data.items() if value == rank)
         if rank <= 200:
             after = next(key for key, value in data.items() if value == test1)
             data[before], data[after] = data[after], data[before]
             i += 1
             
-        elif rank >= 1801:
+        elif rank >= 1800:
             after = next(key for key, value in data.items() if value == test2)
             data[before], data[after] = data[after], data[before]
             s += 1
-
             
 sorted_data = dict(sorted(data.items(), key=lambda x: x[1]))
 
@@ -179,18 +209,21 @@ with open("adjusted_submission.csv", 'w', newline='') as file:
 
     for code, rank in sorted_data.items():
         writer.writerow([code, rank])
-        
-# 분류된 주식에 따라 마지막 16일 데이터로 샤프지수 계산
+
+
+
+# 분류된 주식에 따라 마지막 15일 데이터로 샤프지수 계산
 returns = {}
 final_buy_returns = 0
 final_sell_returns = 0
+ 
 
 for code in sorted_codes:
     rank = sorted_data.get(code)
 
     if 1 <= rank <= 200 or 1801 <= rank <= 2000:
     
-        # 마지막 16일 동안의 주식 종가 데이터 가져오기
+        # 마지막 15일 동안의 주식 가격 데이터 가져오기
         index_list = [i for i, x in enumerate(codes) if x == code][-16:]
         code_closes = [closes[i] for i in index_list]
 
@@ -209,7 +242,7 @@ for code in sorted_codes:
 
         returns[code] = daily_returns
 
-n_values = range(2, 16)
+n_values = range(2, 16)  # n=2부터 n=15까지
 
 # 각 n에 해당하는 일간 수익률을 저장할 리스트 초기화
 avg_n_day_returns = [0] * len(n_values)
@@ -234,6 +267,7 @@ avg_daily_return = np.mean(all_daily_returns) * 250
 sum_diff_squared = 0
         
 for i in range(0,14):
+
     avg_n_day_return = avg_n_day_returns[i] * 250
     diff_squared = (avg_n_day_return - avg_daily_return) ** 2
     sum_diff_squared += diff_squared
